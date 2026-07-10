@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+.venv/
+knowledge/vector_store/
+.rag-settings.json
