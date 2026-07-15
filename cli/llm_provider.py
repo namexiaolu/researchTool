@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
+import subprocess
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
 
-SUPPORTED_PROVIDERS = {"ollama", "openai", "ccswitch"}
+SUPPORTED_PROVIDERS = {"ollama", "openai", "ccswitch", "opencode"}
+ANSI_PATTERN = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 SUPPORTED_REASONING_EFFORTS = {"none", "low", "medium", "high", "xhigh", "max"}
 
 
@@ -53,6 +57,9 @@ def load_llm_config(provider: str | None = None) -> LlmConfig:
             reasoning_effort=reasoning_effort,
         )
 
+    if selected == "opencode":
+        return _load_opencode_config()
+
     return _load_ccswitch_config()
 
 
@@ -68,6 +75,9 @@ def generate_text(
         llm = OllamaLLM(model=config.model)
         combined_prompt = f"{instructions}\n\n{prompt}"
         return str(llm.invoke(combined_prompt)).strip()
+
+    if config.provider == "opencode":
+        return _opencode_generate(prompt, instructions, config.model)
 
     from openai import OpenAI
 
@@ -158,6 +168,66 @@ def _load_ccswitch_config() -> LlmConfig:
         reasoning_effort=reasoning_effort,
         store=store,
     )
+
+
+def _load_opencode_config() -> LlmConfig:
+    opencode = _find_opencode()
+    if not opencode:
+        raise RuntimeError("没有找到 OpenCode 命令。")
+    model = os.getenv("OPENCODE_MODEL", "opencode/deepseek-v4-flash-free").strip()
+    return LlmConfig(
+        provider="opencode",
+        model=model,
+        display_name=f"OpenCode / {model}",
+    )
+
+
+def _find_opencode() -> str | None:
+    return (
+        shutil.which("opencode") or shutil.which("opencode.exe")
+    )
+
+
+def _opencode_generate(prompt: str, instructions: str, model: str) -> str:
+    opencode = _find_opencode()
+    if not opencode:
+        raise RuntimeError("没有找到 OpenCode 命令。")
+    project_root = Path(__file__).resolve().parent.parent
+    combined = f"{instructions}\n\n{prompt}"
+    try:
+        result = subprocess.run(
+            [opencode, "run", "--model", model, "--dir", str(project_root), "--format", "json", combined],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("OpenCode 生成超时。") from None
+
+    fragments: list[str] = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+            if event.get("type") == "text":
+                part = event.get("part") or {}
+                if part.get("type") == "text" and part.get("text"):
+                    fragments.append(part["text"])
+        except (json.JSONDecodeError, KeyError):
+            continue
+
+    output = "".join(fragments).strip()
+    if not output:
+        output = ANSI_PATTERN.sub("", result.stdout).strip()
+    if not output:
+        stderr = ANSI_PATTERN.sub("", result.stderr).strip()
+        raise RuntimeError(f"OpenCode 执行完成但没有返回文本。\n{stderr}" if stderr else "OpenCode 执行完成但没有返回文本。")
+    return output
 
 
 def _required_value(value: object, message: str) -> str:
