@@ -280,9 +280,11 @@ class ProjectMenu:
 
     def keyword_research(self) -> None:
         request = read_required("请输入调研内容：")
+        download = input("是否下载论文 PDF？（y/n，默认 y）：").strip().lower()
+        download_papers = download != "n"
         from cli.researcher import conduct_research
 
-        conduct_research(request)
+        conduct_research(request, download_papers=download_papers)
         print("需要让 RAG 使用新内容时，请再执行菜单 2。")
 
     def build_rag_index(self) -> None:

@@ -16,6 +16,7 @@ from openai import OpenAI
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 KNOWLEDGE_ROOT = PROJECT_ROOT / "knowledge"
+VECTOR_STORE_DIR = KNOWLEDGE_ROOT / "vector_store"
 
 
 def _load_grok_env() -> dict[str, str]:
@@ -429,7 +430,7 @@ def format_paper_markdown(paper: dict) -> str:
     return "\n".join(parts)
 
 
-def fetch_and_save_academic_paper(paper: dict, topic: str, output: list[dict]) -> bool:
+def fetch_and_save_academic_paper(paper: dict, topic: str, output: list[dict], download_papers: bool = True) -> bool:
     content = format_paper_markdown(paper)
     if len(content.strip()) < 100:
         return False
@@ -438,13 +439,16 @@ def fetch_and_save_academic_paper(paper: dict, topic: str, output: list[dict]) -
     path = save_content("papers", topic, content, source_url=source_url)
     print(f"            已保存论文元数据：{path.name}")
 
-    pdf_url = paper.get("pdf_url", "")
-    if pdf_url:
-        pdf_path = download_pdf(pdf_url, topic)
-        if pdf_path:
-            print(f"            已下载论文 PDF：{pdf_path.name}")
-        else:
-            print(f"            PDF 下载失败，跳过")
+    if download_papers:
+        pdf_url = paper.get("pdf_url", "")
+        if pdf_url:
+            pdf_path = download_pdf(pdf_url, topic)
+            if pdf_path:
+                print(f"            已下载论文 PDF：{pdf_path.name}")
+            else:
+                print(f"            PDF 下载失败，跳过")
+    else:
+        print(f"            跳过 PDF 下载")
 
     output.append({"url": source_url, "category": "papers", "path": str(path)})
     return True
@@ -486,9 +490,61 @@ def _generate_plan(topic: str) -> list[dict]:
     ]
 
 
-def conduct_research(topic: str) -> dict:
+def _format_content(raw: str, url: str) -> str:
+    if len(raw.strip()) < 200:
+        return raw
+    try:
+        client = _get_client()
+        resp = client.chat.completions.create(
+            model=GROK_MODEL,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "你是一个内容整理助手。将给定的原始文本整理成结构清晰的 Markdown 格式。"
+                        "要求：删除重复内容、广告、导航栏等无关信息；保留有价值的技术内容和数据；"
+                        "用标题和段落组织内容；信息不足时保留原文。只返回整理后的内容，不要额外说明。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"来源 URL：{url}\n\n原始内容：\n{raw[:8000]}",
+                },
+            ],
+        )
+        formatted = resp.choices[0].message.content.strip()
+        return formatted if formatted else raw
+    except Exception:
+        return raw
+
+
+def _retrieve_local_knowledge(topic: str, top_k: int = 5) -> str:
+    try:
+        from indexer.store import get_retriever
+        retriever = get_retriever(top_k)
+        docs = retriever.invoke(topic)
+        if not docs:
+            return ""
+        parts = []
+        for doc in docs:
+            src = doc.metadata.get("source", "未知来源")
+            parts.append(f"[来源：{src}]\n{doc.page_content}")
+        return "\n\n".join(parts)
+    except Exception:
+        return ""
+
+
+def conduct_research(topic: str, download_papers: bool = True) -> dict:
     started_at = time.perf_counter()
-    print(f"\n[过程 1/7] 生成调研计划 — 将「{topic}」拆分为子问题...")
+
+    print(f"\n[过程 1/8] 检索本地知识库——查找与「{topic}」相关的已有内容...")
+    local_context = _retrieve_local_knowledge(topic)
+    if local_context:
+        print(f"        找到本地相关知识（{len(local_context)} 个字符）")
+    else:
+        print(f"        本地知识库中未找到相关内容（或索引未建立），跳过")
+
+    print(f"\n[过程 2/8] 生成调研计划 — 将「{topic}」拆分为子问题...")
 
     sub_queries = _generate_plan(topic)
     print(f"        共 {len(sub_queries)} 个子查询")
@@ -498,7 +554,7 @@ def conduct_research(topic: str) -> dict:
     for sq in sub_queries:
         sq_id = sq.get("id", "?")
         query = sq.get("query", sq.get("keywords", [""])[0])
-        print(f"\n[过程 2/7] 执行子查询 [{sq_id}]：{query[:60]}...")
+        print(f"\n[过程 3/8] 执行子查询 [{sq_id}]：{query[:60]}...")
 
         search_result = web_search(query)
         print(f"        搜索完成，{len(search_result)} 个字符")
@@ -509,18 +565,21 @@ def conduct_research(topic: str) -> dict:
 
         page_saved = False
         for i, url in enumerate(unique_urls, 1):
-            print(f"  [过程 3/6] 抓取页面 [{sq_id}/{i}]：{url[:60]}...")
+            print(f"  [过程 4/8] 抓取页面 [{sq_id}/{i}]：{url[:60]}...")
             url_lower = url.lower()
 
             # PDF 链接 → 直接下载文件
             if url_lower.endswith(".pdf"):
-                pdf_path = download_pdf(url, topic)
-                if pdf_path:
-                    print(f"            已下载论文 PDF：{pdf_path.name}")
-                    all_pages.append({"url": url, "category": "papers", "path": str(pdf_path)})
-                    page_saved = True
+                if download_papers:
+                    pdf_path = download_pdf(url, topic)
+                    if pdf_path:
+                        print(f"            已下载论文 PDF：{pdf_path.name}")
+                        all_pages.append({"url": url, "category": "papers", "path": str(pdf_path)})
+                        page_saved = True
+                    else:
+                        print(f"            下载失败，跳过")
                 else:
-                    print(f"            下载失败，跳过")
+                    print(f"            跳过 PDF 下载")
                 continue
 
             use_br = any(
@@ -536,6 +595,7 @@ def conduct_research(topic: str) -> dict:
                 continue
 
             category = classify_content(url, content)
+            formatted = False
 
             # arXiv 链接 → 抓取摘要页提升质量
             if "arxiv.org" in url_lower:
@@ -543,6 +603,10 @@ def conduct_research(topic: str) -> dict:
                 if enriched and len(enriched) > 200:
                     content = enriched
                     category = "papers"
+                    formatted = True
+
+            if not formatted:
+                content = _format_content(content, url)
 
             cat_names = {"papers": "论文/文献", "reports": "报告", "sources": "资料/源码", "web": "网页"}
             print(f"            分类：{cat_names.get(category, category)}")
@@ -558,25 +622,30 @@ def conduct_research(topic: str) -> dict:
             print(f"        已保存：{path.name}")
             all_pages.append({"url": query, "category": "web", "path": str(path)})
 
-    print(f"\n[过程 4/7] 学术数据库检索——搜索 arXiv 和 Semantic Scholar...")
+    print(f"\n[过程 5/8] 学术数据库检索——搜索 arXiv 和 Semantic Scholar...")
     academic_papers = search_academic_papers(topic)
     if academic_papers:
         print(f"        找到 {len(academic_papers)} 篇论文")
         for paper in academic_papers:
             title_short = (paper.get("title") or "")[:60]
             print(f"  [学术] {title_short}...")
-            fetch_and_save_academic_paper(paper, topic, all_pages)
+            fetch_and_save_academic_paper(paper, topic, all_pages, download_papers=download_papers)
     else:
         print(f"        未找到相关论文")
 
-    print(f"\n[过程 5/7] 汇总搜索结果——共 {len(all_pages)} 条内容")
+    print(f"\n[过程 6/8] 汇总搜索结果——共 {len(all_pages)} 条内容")
     sources_text = "\n".join(
         f"- [{p['category']}] {p['url']}" for p in all_pages
     )
 
+    local_section = ""
+    if local_context:
+        local_section = f"\n\n本地知识库中已有的相关内容（供参考）：\n{local_context}\n"
+
     summary_prompt = (
         f"以下是关于「{topic}」的调研收集结果。请根据收集到的内容生成一份结构化的中文调研报告。\n\n"
-        f"收集的来源：\n{sources_text}\n\n"
+        f"收集的来源：\n{sources_text}\n"
+        f"{local_section}"
         f"报告要求：\n"
         f"1. 包含标题、摘要、主要发现、对比分析、结论\n"
         f"2. 使用 Markdown 格式\n"
@@ -584,7 +653,7 @@ def conduct_research(topic: str) -> dict:
         f"4. 信息不足时明确说明，不要编造\n"
         f"5. 如有不同方案请用表格对比"
     )
-    print(f"[过程 6/7] 调用 AI 生成综合报告...")
+    print(f"[过程 7/8] 调用 AI 生成综合报告...")
     client = _get_client()
     summary_resp = client.chat.completions.create(
         model=GROK_MODEL,
@@ -594,7 +663,7 @@ def conduct_research(topic: str) -> dict:
 
     report_path = save_summary(topic, report)
     elapsed = time.perf_counter() - started_at
-    print(f"[过程 7/7] 报告已保存：{report_path.name}")
+    print(f"[过程 8/8] 报告已保存：{report_path.name}")
     print(f"\n调研完成，耗时 {elapsed:.1f} 秒")
 
     return {
