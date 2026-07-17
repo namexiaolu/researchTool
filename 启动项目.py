@@ -48,6 +48,9 @@ OPENCODE_RESEARCH_MODEL = os.getenv(
 SUPPORTED_PROVIDERS = {"ollama", "openai", "ccswitch", "opencode"}
 ANSI_PATTERN = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
+OPENCODE_CONFIG_PATH = Path.home() / ".config" / "opencode" / "opencode.json"
+GROKSEARCH_CONFIG_PATH = Path.home() / ".config" / "grok-search" / "config.json"
+
 
 def configure_process() -> None:
     os.chdir(PROJECT_ROOT)
@@ -183,6 +186,8 @@ class ProjectMenu:
                 return self.ollama_model_exists()
             if self.provider == "opencode":
                 return bool(find_command("opencode"))
+            if self.provider == "ccswitch":
+                return self.ccswitch_config_exists()
             return True
         except Exception:
             return False
@@ -204,13 +209,25 @@ class ProjectMenu:
         print("4. OpenCode")
         print()
         choice = input("请选择 AI 后端：").strip()
-        provider = {"1": "ollama", "2": "openai", "3": "ccswitch", "4": "opencode"}.get(choice)
+        provider = {
+            "1": "ollama",
+            "2": "openai",
+            "3": "ccswitch",
+            "4": "opencode",
+        }.get(choice)
         if not provider:
             raise ValueError("请输入 1、2、3 或 4。")
 
         previous_environment = {
             key: os.environ.get(key)
-            for key in ("RAG_LLM_PROVIDER", "OLLAMA_MODEL", "OPENAI_API_KEY", "OPENAI_MODEL", "OPENAI_BASE_URL", "OPENCODE_MODEL")
+            for key in (
+                "RAG_LLM_PROVIDER",
+                "OLLAMA_MODEL",
+                "OPENAI_API_KEY",
+                "OPENAI_MODEL",
+                "OPENAI_BASE_URL",
+                "OPENCODE_MODEL",
+            )
         }
         previous = self.provider
         try:
@@ -235,6 +252,9 @@ class ProjectMenu:
                     os.environ["OPENAI_BASE_URL"] = base_url
                 elif not current_base_url:
                     os.environ.pop("OPENAI_BASE_URL", None)
+            elif provider == "ccswitch":
+                # 直接校验 ~/.codex 当前 provider，无需额外输入
+                load_llm_config("ccswitch")
             elif provider == "opencode":
                 if not find_command("opencode"):
                     raise RuntimeError("没有找到 OpenCode 命令，请先安装 OpenCode。")
@@ -266,6 +286,9 @@ class ProjectMenu:
                 "opencode_model": os.getenv("OPENCODE_MODEL", ""),
             }
         )
+        # 清理历史 Grok 字段（菜单 5 不再使用；调研引擎仍可单独读 ~/.grok/config.toml）
+        self.settings.pop("grok_model", None)
+        self.settings.pop("grok_api_url", None)
         save_settings(self.settings)
         print(f"\nAI 后端已真实切换：{summary}")
         print("后续调研报告和自由提问将使用该后端；API Key 不会写入项目文件。")
@@ -372,6 +395,118 @@ class ProjectMenu:
             ]
         )
 
+    def configure_groksearch(self) -> None:
+        print()
+        if not OPENCODE_CONFIG_PATH.is_file():
+            raise RuntimeError(f"opencode config not found: {OPENCODE_CONFIG_PATH}")
+        config = json.loads(OPENCODE_CONFIG_PATH.read_text(encoding="utf-8"))
+        env = config.get("mcp", {}).get("grok-search", {}).get("environment", {})
+
+        print("Current GrokSearch API configuration:")
+        print(f"  API URL : {env.get('GROK_API_URL', 'not set')}")
+        key = env.get("GROK_API_KEY", "")
+        if key:
+            print(f"  API Key : {key[:8]}****{key[-4:]}")
+        else:
+            print("  API Key : not set")
+        print(f"  Model   : {env.get('GROK_MODEL', 'not set')}")
+        print()
+
+        if GROKSEARCH_CONFIG_PATH.is_file():
+            gs_config = json.loads(GROKSEARCH_CONFIG_PATH.read_text(encoding="utf-8"))
+            if gs_config.get("model"):
+                print(f"  Model override (config.json): {gs_config['model']}")
+                print()
+
+        print("1. Set API URL")
+        print("2. Set API Key")
+        print("3. Set Model")
+        print("4. Test connection")
+        print("0. Back")
+        print()
+        choice = input("Select: ").strip()
+
+        if choice == "0":
+            return
+
+        updates = {}
+        if choice == "1":
+            url = read_required("API URL (e.g. https://freeapi.dgbmc.top/v1): ")
+            updates["GROK_API_URL"] = url.rstrip("/")
+        elif choice == "2":
+            key = getpass.getpass("API Key: ").strip()
+            if not key:
+                raise ValueError("API Key cannot be empty")
+            updates["GROK_API_KEY"] = key
+        elif choice == "3":
+            model = read_required("Model (e.g. grok-chat-fast, deepseek-ai/deepseek-v4-flash): ")
+            updates["GROK_MODEL"] = model
+        elif choice == "4":
+            self._test_grok_connection(env)
+            return
+        else:
+            raise ValueError("Invalid choice")
+
+        if updates:
+            mcp = config.setdefault("mcp", {})
+            gs = mcp.setdefault("grok-search", {})
+            gsenv = gs.setdefault("environment", {})
+            gsenv.update(updates)
+            OPENCODE_CONFIG_PATH.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+            for k, v in updates.items():
+                old = env.get(k, "not set")
+                if k == "GROK_API_KEY":
+                    old_d = (old[:8] + "****" + old[-4:]) if old != "not set" else old
+                    new_d = v[:8] + "****" + v[-4:]
+                    print(f"  {k}: {old_d} -> {new_d}")
+                else:
+                    print(f"  {k}: {old} -> {v}")
+
+            if choice == "3":
+                gs_config_grok = {}
+                if GROKSEARCH_CONFIG_PATH.is_file():
+                    gs_config_grok = json.loads(GROKSEARCH_CONFIG_PATH.read_text(encoding="utf-8"))
+                gs_config_grok["model"] = model
+                GROKSEARCH_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+                GROKSEARCH_CONFIG_PATH.write_text(json.dumps(gs_config_grok, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                print("  Model synced to grok-search config.json")
+
+            print("\n  Restart opencode for env vars to take effect: opencode restart")
+
+    @staticmethod
+    def _test_grok_connection(env: dict) -> None:
+        import urllib.request
+        import urllib.error
+
+        url = env.get("GROK_API_URL", "").rstrip("/")
+        key = env.get("GROK_API_KEY", "")
+        if not url or not key:
+            raise RuntimeError("API URL and API Key must be configured first")
+
+        print(f"  Testing {url}/models ...")
+        req = urllib.request.Request(
+            f"{url}/models",
+            headers={"Authorization": f"Bearer {key}"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+                print(f"  Connection OK (HTTP {resp.status})")
+                models = []
+                if isinstance(data, dict) and "data" in data:
+                    models = data["data"]
+                elif isinstance(data, list):
+                    models = data
+                print(f"  Available models ({len(models)}):")
+                for m in models:
+                    mid = m.get("id", m) if isinstance(m, dict) else m
+                    print(f"    - {mid}")
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(f"HTTP {e.code}: {e.reason}")
+        except urllib.error.URLError as e:
+            raise RuntimeError(f"Connection failed: {e.reason}")
+
     def self_test(self) -> None:
         checks = {
             "ProjectRoot": str(PROJECT_ROOT),
@@ -409,6 +544,7 @@ class ProjectMenu:
             print("3. 根据提示词生成调研报告")
             print("4. 自由提问")
             print("5. 切换 AI 后端（Ollama / OpenAI / CCSwitch / OpenCode）")
+            print("6. 配置 GrokSearch API（API 地址 / Key / 模型）")
             print("0. 退出")
             print()
 
@@ -426,10 +562,11 @@ class ProjectMenu:
                     "3": self.research_report,
                     "4": self.free_question,
                     "5": self.select_provider,
+                    "6": self.configure_groksearch,
                 }
                 action = actions.get(choice)
                 if not action:
-                    print("请输入 0 到 5。")
+                    print("请输入 0 到 6。")
                 else:
                     action()
             except (RuntimeError, ValueError, OSError) as exc:
