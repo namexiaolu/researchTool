@@ -46,7 +46,6 @@ OPENCODE_RESEARCH_MODEL = os.getenv(
     "OPENCODE_RESEARCH_MODEL", "opencode/deepseek-v4-flash-free"
 ).strip()
 SUPPORTED_PROVIDERS = {"ollama", "openai", "ccswitch", "opencode"}
-ANSI_PATTERN = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
 
 OPENCODE_CONFIG_PATH = Path.home() / ".config" / "opencode" / "opencode.json"
 GROKSEARCH_CONFIG_PATH = Path.home() / ".config" / "grok-search" / "config.json"
@@ -186,8 +185,6 @@ class ProjectMenu:
                 return self.ollama_model_exists()
             if self.provider == "opencode":
                 return bool(find_command("opencode"))
-            if self.provider == "ccswitch":
-                return self.ccswitch_config_exists()
             return True
         except Exception:
             return False

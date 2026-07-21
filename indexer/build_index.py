@@ -1,7 +1,7 @@
 from pathlib import Path
 from time import perf_counter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from indexer.loaders import load as load_doc
-from indexer.splitter import get_splitter
 from indexer.store import build
 
 KNOWLEDGE_DIR = Path("knowledge")
@@ -25,7 +25,11 @@ def scan_and_build():
         except Exception as e:
             print(f"  ✗ {fp.relative_to(KNOWLEDGE_DIR)}: {e}")
 
-    splitter = get_splitter()
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=512,
+        chunk_overlap=64,
+        separators=["\n\n", "\n", "。", "；", " ", ""],
+    )
     chunks = splitter.split_documents(all_docs)
     print(f"\n[过程] 文档加载完成：{len(all_docs)} 个文档片段。")
     print(f"[过程] 分块完成：共 {len(chunks)} 个文本块。")

@@ -196,7 +196,7 @@ def _opencode_generate(prompt: str, instructions: str, model: str) -> str:
     combined = f"{instructions}\n\n{prompt}"
     try:
         result = subprocess.run(
-            [opencode, "run", "--model", model, "--dir", str(project_root), "--format", "json", combined],
+            [opencode, "run", "--pure", "--model", model, "--dir", str(project_root), "--format", "json", combined],
             cwd=project_root,
             capture_output=True,
             text=True,
@@ -222,7 +222,7 @@ def _opencode_generate(prompt: str, instructions: str, model: str) -> str:
             continue
 
     output = "".join(fragments).strip()
-    if not output:
+    if not output and not result.stdout.lstrip().startswith("{"):
         output = ANSI_PATTERN.sub("", result.stdout).strip()
     if not output:
         stderr = ANSI_PATTERN.sub("", result.stderr).strip()

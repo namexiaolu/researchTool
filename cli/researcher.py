@@ -16,7 +16,6 @@ from openai import OpenAI
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 KNOWLEDGE_ROOT = PROJECT_ROOT / "knowledge"
-VECTOR_STORE_DIR = KNOWLEDGE_ROOT / "vector_store"
 
 
 def _load_grok_env() -> dict[str, str]:
@@ -57,12 +56,6 @@ GROK_API_URL = _grok_env["url"] or "https://freeapi.dgbmc.top/v1"
 GROK_API_KEY = _grok_env["key"]
 GROK_MODEL = _grok_env["model"] or "grok-chat-fast"
 BROWSER_RELAY_URL = os.getenv("BROWSER_RELAY_URL", "http://127.0.0.1:18795")
-
-
-def _models() -> list[str]:
-    resp = httpx.get(f"{GROK_API_URL}/models", headers={"Authorization": f"Bearer {GROK_API_KEY}"}, timeout=10)
-    data = resp.json()
-    return [m["id"] for m in (data.get("data") or data)]
 
 
 def _get_client() -> OpenAI:
@@ -212,12 +205,6 @@ def web_fetch_browser(url: str) -> Optional[str]:
     if snap:
         return snap.get("content")
     return None
-
-
-def web_fetch(url: str, use_browser: bool = False) -> Optional[str]:
-    if use_browser:
-        return web_fetch_browser(url)
-    return web_fetch_httpx(url)
 
 
 def classify_content(url: str, content: str) -> str:
@@ -589,7 +576,7 @@ def conduct_research(topic: str, download_papers: bool = True) -> dict:
                     "reddit", "weibo", "zhihu",
                 ]
             )
-            content = web_fetch(url, use_browser=use_br)
+            content = web_fetch_browser(url) if use_br else web_fetch_httpx(url)
             if not content:
                 print(f"            抓取失败，跳过")
                 continue

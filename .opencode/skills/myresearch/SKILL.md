@@ -13,7 +13,6 @@ trigger: /myresearch
 ```
 /myresearch <topic>                    # 标准调研
 /myresearch <topic> --depth 3          # 深度调研（3轮搜索）
-/myresearch <topic> --lang en          # 英文资料优先
 ```
 
 ## Execution
@@ -21,7 +20,7 @@ trigger: /myresearch
 1. **生成调研计划** — 运行脚本生成子查询和搜索策略：
 
 ```powershell
-python scripts/run_research.py --topic "<topic>" --depth <depth> --lang <lang>
+python scripts/run_research.py --topic "<topic>" --depth <depth>
 ```
 
 2. **执行多轮搜索** — 根据计划中的 sub_queries，使用 grok-search：

@@ -8,6 +8,7 @@ from cli.llm_provider import describe_config, generate_text, load_llm_config
 from indexer.store import get_retriever
 
 app = typer.Typer()
+NON_ANSWERS = ("请提供", "请提出", "请说你的问题", "没有提供问题", "还没有提供问题", "我会尽力回答", "请告诉我", "我可以回答")
 
 
 def retrieve_context(question: str, top_k: int = 5):
@@ -40,14 +41,16 @@ def ask(
         docs, context = retrieve_context(question, top_k)
         if trace:
             rprint(f"[dim][过程] 已检索到 {len(docs)} 个参考文本块。[/]", file=sys.stderr)
-        prompt = f"上下文：\n{context}\n\n问题：{question}"
+        prompt = f"资料：\n{context}\n\n问题：{question}\n请直接回答问题。"
         if trace:
             rprint("[dim][过程] 组装上下文和回答约束，开始调用模型...[/]", file=sys.stderr)
         answer = generate_text(
             prompt,
-            instructions="你是知识库助手。只能基于提供的上下文回答；信息不足就说不知道，不要编造。",
+            instructions="回答问题。",
             config=config,
         )
+        if len(answer) < 30 or any(text in answer for text in NON_ANSWERS):
+            answer = f"模型未给出有效回答，以下是最相关的知识库资料：\n\n{docs[0].page_content}"
         if trace:
             rprint(f"[dim][过程] 模型已返回回答，共 {len(answer):,} 个字符。[/]", file=sys.stderr)
     except Exception as exc:
