@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-tool.local/config.schema.json",
+  "title": "ResearchTool Configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "active_tool",
+    "active_provider",
+    "profiles",
+    "embedding_model",
+    "top_k"
+  ],
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "active_tool": {
+      "enum": ["codex", "claudecode", "opencode", "grok"]
+    },
+    "active_provider": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "profiles": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/providerProfile"
+      }
+    },
+    "embedding_model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "top_k": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "$defs": {
+    "providerProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "model"],
+      "properties": {
+        "protocol": {
+          "enum": [
+            "ollama",
+            "openai-responses",
+            "anthropic-messages",
+            "opencode"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "api_key": {
+          "type": "string"
+        },
+        "base_url": {
+          "type": "string",
+          "anyOf": [
+            {
+              "const": ""
+            },
+            {
+              "pattern": "^https?://"
+            }
+          ]
+        },
+        "reasoning_effort": {
+          "enum": ["", "none", "low", "medium", "high", "xhigh", "max"]
+        },
+        "auth_mode": {
+          "enum": ["api-key", "bearer"]
+        },
+        "store": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "protocol": {
+                "enum": ["openai-responses", "anthropic-messages"]
+              }
+            }
+          },
+          "then": {
+            "required": ["api_key"],
+            "properties": {
+              "api_key": {
+                "minLength": 1
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
